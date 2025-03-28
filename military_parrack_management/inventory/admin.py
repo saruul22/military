@@ -7,12 +7,13 @@ import segno
 import io
 import base64
 import uuid
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseBadRequest
 from django.contrib import messages
+import sys
 
 @admin.register(Weapon)
 class WeaponAdmin(ModelAdmin):
-    list_display = ('weapon_id', 'status', 'owner_id', 'display_qr_code', 'print_qr_action')
+    list_display = ('weapon_id', 'status', 'owner_id', 'display_qr_code')
     fields = ('weapon_id', 'bolt_id', 'bolt_carrier_id', 'case_id', 'owner_id')
 
     # Сонгогдсон зэвсгүүдийг хэвлэх action
@@ -49,16 +50,46 @@ class WeaponAdmin(ModelAdmin):
 
         return mark_safe(f'<img src="data:image/png;base64,{image_base64}" width="100" height="100" />')
 
-    display_qr_code.short_description = 'QR Code'
+    display_qr_code.short_description = 'QR Код'
 
-    def print_qr_action(self, obj):
-        # QR тус бүрийг хэвлэх боломжтой болгох
-        return mark_safe(
-            f'<a href="/admin/print_qr_code/{obj.pk}" '
-            f'class="button">Print QR</a>'
-        )
-    print_qr_action.short_description = 'Print Action'
+    def print_single_qr_code(request, weapon_id):
+        try:
+            # Explicitly check if weapon exists
+            try:
+                weapon = Weapon.objects.get(weapon_id=weapon_id)
+            except Weapon.DoesNotExist:
+                print(f"No weapon found with ID: {weapon_id}")
+                print("Existing weapon IDs:")
+                for w in Weapon.objects.all():
+                    print(w.weapon_id)
+                return HttpResponseBadRequest(f"No weapon found with ID: {weapon_id}")
 
+            # Explicit checks
+            if not weapon.qr_code:
+                return HttpResponseBadRequest("No QR code generated for this weapon")
+
+            # Generate QR code with verbose error handling
+            try:
+                qr = segno.make(weapon.qr_code, error='H')
+            except Exception as qr_error:
+                print(f"QR Code generation error: {qr_error}")
+                return HttpResponseBadRequest(f"QR Code generation failed: {qr_error}")
+
+            # Buffer and response
+            buffer = io.BytesIO()
+            qr.save(buffer, kind='png', scale=10, dark='#000000', light='#FFFFFF')
+            buffer.seek(0)
+
+            response = HttpResponse(buffer, content_type='image/png')
+            response['Content-Disposition'] = f'attachment; filename="{weapon.weapon_id}_qr_code.png"'
+
+            return response
+
+        except Exception as e:
+            # Catch-all error handling with full traceback
+            print(f"Unexpected error: {e}")
+            print(f"Traceback: {sys.exc_info()}")
+        
     def bulk_print_qr_codes(self, request, queryset):
         # Олноор нь сонгож хэвлэх
         if queryset.count() == 1:
